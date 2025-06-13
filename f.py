@@ -18,7 +18,7 @@ API_BASE = "https://pay.crypt.bot/api"
 SUBSCRIPTION_PRICE = 3.0  # Цена подписки 3$
 BOT_TOKEN = '8048949774:AAE8_hbqnCu5rwfrLdqZFlgbZ3v_INCfEZA'
 # ЗАМЕНИТЕ НА ВАШ РЕАЛЬНЫЙ URL ДЛЯ ПРОДАКШЕНА!
-BASE_URL = "https://dox-searcher.onrender.com:5000"
+BASE_URL = "https://dox-searcher.onrender.com"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
