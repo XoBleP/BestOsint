@@ -15,7 +15,7 @@ from datetime import datetime
 app = Flask(__name__)
 
 # Конфигурация
-BOT_TOKEN = '8048949774:AAE8_hbqnCu5rwfrLdqZFlgbZ3v_INCfEZA'
+BOT_TOKEN = '8048949774:AAF79Ml1LGb8xlmCnBmFHC1a900mgOAz3WM'
 BASE_URL = "https://dox-searcher.onrender.com"
 IPINFO_TOKEN = "c39bb318760ade"  # Получите токен на ipinfo.io
 
