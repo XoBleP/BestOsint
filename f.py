@@ -14,7 +14,7 @@ from datetime import datetime
 app = Flask(__name__)
 
 # Конфигурация
-BOT_TOKEN = '8048949774:AAGn0SKXaxbcvUW1tULlqFty0_6BL6D3-4I'
+BOT_TOKEN = '8048949774:AAEqlTkVH_VKcJb-AmTW_2Y2zzdVyYktom0'
 BASE_URL = "https://dox-searcher.onrender.com"
 
 bot = telebot.TeleBot(BOT_TOKEN)
